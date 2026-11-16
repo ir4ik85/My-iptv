@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="he" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>איחוד וסינון רשימות IPTV</title>
+<style>
+:root{font-family:system-ui,-apple-system,'Segoe UI',Arial,sans-serif;color-scheme:light}
+body{margin:0;background:#f3f5f9;color:#182236}.wrap{max-width:730px;margin:24px auto;padding:0 16px}
+.panel{background:white;border:1px solid #e1e6ee;border-radius:16px;padding:22px;box-shadow:0 4px 20px #202e4410}
+h1{font-size:1.5rem;margin:0 0 7px}.muted{color:#576478;font-size:.94rem;line-height:1.65}ul{line-height:1.85;padding-right:22px}
+button,.dl{appearance:none;border:0;border-radius:11px;padding:12px 20px;background:#2454cb;color:white;font-weight:700;font-size:1rem;cursor:pointer;text-decoration:none;display:inline-block;margin:6px 0}
+button:disabled{opacity:.5;cursor:not-allowed}.dl{background:#126448}.dl[aria-disabled="true"]{display:none}
+.status{white-space:pre-wrap;background:#f4f7fb;border-radius:10px;padding:14px;line-height:1.6;min-height:32px;margin-top:15px}
+.metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:16px 0}
+.metric{background:#f6f8fb;border-radius:12px;padding:12px}.metric b{display:block;font-size:1.35rem}
+.small{font-size:.84rem}.warn{color:#944a07}.good{color:#176449}
+input{accent-color:#2454cb}label{display:block;margin:12px 0}.hidden{display:none}.links{display:flex;flex-direction:column;align-items:flex-start}
+</style></head><body><main class="wrap"><div class="panel">
+<h1>📺 איחוד וסינון ערוצי M3U</h1>
+<p class="muted">הכלי מיועד לשלושת הקישורים שנתת. הוא יוצר שני קבצים: רוסית + עברית, ורוסית + עברית + אנגלית. בכל שפה הערוצים מסודרים לפי קטגוריות, וכפילויות מוסרות.</p>
+<p class="small"><b>מקורות:</b><br>1. IPTV-org – רוסית<br>2. NGRCH – רוסית<br>3. IPTV-org – ישראל</p>
+<label><input type="checkbox" id="test" checked> לבדוק קישורי שידור (רק שגיאות 404/410 חוזרות יגרמו להסרה)</label>
+<p class="muted small">הבדיקה נעשית בדפדפן. אם שרת חוסם בדיקות אוטומטיות/CORS, הערוץ נשאר ומסומן כלא מאומת. גם תגובה תקינה אינה מבטיחה ניגון בכל נגן ובכל מדינה. לא יוסרו ערוצים על סמך timeout, שגיאות גישה 403 או חסימת CORS.</p>
+<button id="go">הכיני את שני הקבצים</button>
+<div role="status" aria-live="polite" id="status" class="status">מוכן להתחיל.</div>
+<div class="metrics hidden" id="metrics"></div>
+<div class="links hidden" id="downloads">
+<a class="dl" id="d1">הורידי רוסית + עברית (.m3u)</a>
+<a class="dl" id="d2">הורידי רוסית + עברית + אנגלית (.m3u)</a>
+<a class="dl" id="dr">הורידי דו״ח בדיקה (.csv)</a>
+<a class="dl" id="dt">הורידי סיכום (.txt)</a>
+</div>
+<p class="muted small">ברשימות שבחרת אין מקור כללי לערוצים באנגלית, ולכן ייתכן שקובץ 2 לא יוסיף ערוצי אנגלית. המידע והקבצים נוצרים במכשיר שלך. אין העלאה של הקבצים לשרת חיצוני. בדיקה של מאות ערוצים עשויה לקחת זמן, במיוחד בטלפון; השאירי את הדף פתוח בזמן ההרצה.</p>
+</div></main>
+<script>
+'use strict';
+const SOURCES=[
+ {url:'https://iptv-org.github.io/iptv/languages/rus.m3u',backup:'https://raw.githubusercontent.com/iptv-org/iptv/gh-pages/languages/rus.m3u',lang:'ru'},
+ {url:'https://ngrch.github.io/iptv/ru.m3u',backup:'https://raw.githubusercontent.com/ngrch/iptv/main/ru.m3u',lang:'ru'},
+ {url:'https://iptv-org.github.io/iptv/countries/il.m3u',backup:'https://raw.githubusercontent.com/iptv-org/iptv/gh-pages/countries/il.m3u',lang:'il'}
+];
+const $=id=>document.getElementById(id);let blobUrls=[];
+function status(s){$('status').textContent=s}
+const LANG={ru:'רוסית',he:'עברית',en:'אנגלית'};
+const CATS=['כללי','חדשות','סרטים','סדרות ובידור','ספורט','ילדים','מוזיקה','דוקומנטרי וטבע','אחר'];
+const catAliases={general:0,public:0,news:1,legislative:1,business:1,movies:2,classic:2,series:3,entertainment:3,comedy:3,family:3,lifestyle:3,sports:4,kids:5,animation:5,music:6,documentary:7,science:7,education:7,culture:7,travel:7,nature:7,wildlife:7};
+const catPrefix=(n)=>String(n+1).padStart(2,'0');
+function category(orig,name){let s=(orig||'').toLowerCase().trim();
+ for(const [key,val] of Object.entries(catAliases))if(s.split(/[|,\/]/).some(v=>v.trim()===key)||s===key)return val;
+ const t=(orig+' '+name).toLowerCase();
+ if(/основн|общие|федеральн/.test(s))return 0;
+ if(/новост|информац/.test(s))return 1;
+ if(/фильм|кино/.test(s))return 2;
+ if(/сериал|развлеч|юмор|комед/.test(s))return 3;
+ if(/спорт/.test(s))return 4;
+ if(/детск|мульт|анимац/.test(s))return 5;
+ if(/музык|музыка|радио/.test(s))return 6;
+ if(/познават|документ|природ|наук|культур|истор/.test(s))return 7;
+ if(/חדשות|новост|news|вест[ьи]/i.test(t))return 1;
+ if(/фильм|кино|movie|cinema|סרט/i.test(t))return 2;
+ if(/спорт|sport|ספורט/i.test(t))return 4;
+ if(/дет|мульт|kids|cartoon|ילד/i.test(t))return 5;
+ if(/музык|music|муз|מוזיק/i.test(t))return 6;
+ if(/docu|document|природ|документ|טבע/i.test(t))return 7;
+ return 8;
+}
+function readAttrs(line){let a={}; for(const m of line.matchAll(/([\w-]+)="([^"]*)"/g))a[m[1].toLowerCase()]=m[2];return a}
+function parseM3U(text,sourceIndex){let arr=[],lines=text.replace(/^\uFEFF/,'').split(/\r?\n/),meta=null,extras=[];
+ for(let i=0;i<lines.length;i++){
+  let line=lines[i].trim();if(!line)continue;
+  if(line.startsWith('#EXTINF:')){meta=line;extras=[];continue}
+  if(line.startsWith('#')){if(meta&&/^#(?:EXTVLCOPT|KODIPROP|EXTGRP|EXTHTTP|EXT-X-)/i.test(line))extras.push(line);continue}
+  if(!meta)continue;
+  if(!/^(https?:\/\/|rtsp:\/\/|rtmp:\/\/|udp:\/\/|rtp:\/\/)/i.test(line)){meta=null;extras=[];continue}
+  const attrs=readAttrs(meta),comm=meta.lastIndexOf(','),name=(comm<0?'ללא שם':meta.slice(comm+1).trim())||'ללא שם';
+  arr.push({name,url:line,attrs,sourceIndex,extra:[...extras],lang:null,category:8,state:'uncertain',why:'טרם נבדק'});
+  meta=null;extras=[];
+ }
+ return arr;
+}
+async function fetchTimeout(url,ms=18000){let ctrl=new AbortController(),timer=setTimeout(()=>ctrl.abort(),ms);try{let r=await fetch(url,{signal:ctrl.signal,cache:'no-store'});if(!r.ok)throw Error('HTTP '+r.status);return await r.text()}finally{clearTimeout(timer)}}
+async function getSource(s){let errors=[];for(const url of [s.url,s.backup]){
+ try{let t=await fetchTimeout(url,26000);if(!t.includes('#EXTINF:'))throw Error('לא נמצאו ערוצים');return t}catch(e){errors.push(url+' – '+e.message)} }
+ throw Error(errors.join(' / '));}
+async function getMetadata(){let urls=['https://iptv-org.github.io/api/channels.json','https://raw.githubusercontent.com/iptv-org/api/gh-pages/channels.json'];for(let url of urls){try{
+ const t=await fetchTimeout(url,22000),channels=JSON.parse(t);if(!Array.isArray(channels))continue;
+ const byId=new Map();for(let c of channels)if(c.id)byId.set(c.id.toLowerCase(),c);
+ return byId;
+ }catch(e){}}
+ return new Map();}
+function languageFromApi(rec){if(!rec)return null;let langs=rec.languages||rec.language||[];if(!Array.isArray(langs))langs=[langs];let set=new Set(langs.map(x=>String(x).toLowerCase()).filter(Boolean));
+ if(!set.size)return null;
+ if(set.has('rus')||set.has('ru'))return 'ru';if(set.has('heb')||set.has('he'))return 'he';if(set.has('eng')||set.has('en'))return 'en';return 'skip';}
+function fallbackIsraeli(name,id){
+ let t=(name+' '+id).toLowerCase();let stem=id.replace(/@.*$/,'').split('.')[0].toLowerCase();
+ const he=new Set(['5plus','5stars','angeltv','channel13','channel16','channel24','comedychannel','goodlife','healthchannel','hidabroot','hop','hotdrama','hotzone','i24newshebrew','kabbalahforthepeopleisrael','kan11','kaneducational','keshet12','knessetchannel','now14','realitychannel','shelanutv','teennick','theisraelinetwork','vacationchannel','vivapremium','yamtichoni','yesmoviesaction','zoom']);
+ const ru=new Set(['channel9','rtgint']);
+ const skip=new Set(['halatv','makan33','i24newsarabic','i24newsfrench']);
+ if(skip.has(stem)||/[\u0600-\u06ff]/.test(name)||/(arabic|arabia|al jazeera|alaraby|palestine|makan 33|makan33|french)/i.test(t))return 'skip';
+ if(ru.has(stem)||/\b(channel ?9|israel plus|9 канал|9tv|russian|russki|rtvi)\b/i.test(t)||/русск|росси|израиль плюс/i.test(t))return 'ru';
+ if(/\b(english|il tv|iltv|i24news en|i24 news english|international english|english news)\b/i.test(t))return 'en';
+ if(he.has(stem)||/hebrew|ivrit|kan|keshet|reshet|channel ?1[1234]|ערוץ|כאן|חדשות|ישראל|ספורט|ידברות|קשת|רשת/i.test(t))return 'he';
+ // רשימת Israel היא גיאוגרפית, לא שפתית: ערוצים לא מזוהים לא ישויכו בטעות
+ return 'skip';}
+function assignLanguage(ch,meta){const s=SOURCES[ch.sourceIndex];if(s.lang==='ru')return 'ru';
+ let id=ch.attrs['tvg-id']||'';let idBase=id.replace(/@[^@]*$/,'').toLowerCase();
+ const l=ch.attrs['tvg-language']||ch.attrs['language'];if(l){let a=l.toLowerCase();if(/рус|russ|^ru$/.test(a))return 'ru';if(/heb|hebrew|עבר|^he$/.test(a))return 'he';if(/eng|english|^en$/.test(a))return 'en';return 'skip'}
+ return languageFromApi(meta.get(idBase)||meta.get(id.toLowerCase()))||fallbackIsraeli(ch.name,id);
+}
+function normUrl(url){return url.trim().replace(/#.*$/,'')}
+function normName(name){return name.toLowerCase().replace(/\((?:\d{3,4}p|\d+k|hd|fhd|sd|uhd|4k)\)/gi,'').replace(/\b(?:hd|sd|fhd|uhd|4k|1080p|720p|576p|480p)\b/gi,'').replace(/[^a-z\u0400-\u04ff\u0590-\u05ff\d]+/gi,'').trim()}
+function duplicateKey(ch){let id=(ch.attrs['tvg-id']||'').toLowerCase().replace(/@(?:sd|hd|fhd|uhd|4k|\d+p)$/i,'');return ch.lang+'|'+(id?'id:'+id:'name:'+normName(ch.name));}
+function score(ch){let st=ch.state==='confirmed'?100000:ch.state==='uncertain'?50000:0;
+ let quality=(ch.name.match(/(2160|1440|1080|720|576|480)p/i)||[])[1];
+ return st+(Number(quality)||0)+(ch.attrs['tvg-logo']?120:0)+(ch.attrs['tvg-id']?50:0)+(2-ch.sourceIndex)*5;
+}
+async function oneProbe(url){const ctrl=new AbortController(),timer=setTimeout(()=>ctrl.abort(),5700);
+ try{let r=await fetch(url,{method:'GET',mode:'cors',cache:'no-store',signal:ctrl.signal,headers:{'Range':'bytes=0-4095'}});
+  if(r.status===404||r.status===410)return {state:'dead',why:'HTTP '+r.status};
+  if(!r.ok)return {state:'uncertain',why:'HTTP '+r.status+' (עשוי להיות חסום גיאוגרפית או דורש הרשאה)'};
+  if(!r.body)return {state:'uncertain',why:'השרת מגיב ללא נתוני שידור'};
+  const reader=r.body.getReader();let data;
+  try{const first=await reader.read();data=first.value||new Uint8Array()}finally{reader.cancel().catch(()=>{})}
+  let str=new TextDecoder('utf-8').decode(data.slice(0,4000));
+  if(str.includes('#EXTM3U')&&/#EXT-X-/.test(str))return {state:'confirmed',why:'מניפסט HLS תקין הוחזר'};
+  if(data.length>=377&&data[0]===0x47&&data[188]===0x47)return {state:'confirmed',why:'נתוני MPEG-TS התקבלו'};
+  if(data.length>=12&&String.fromCharCode(...data.slice(4,8))==='ftyp')return {state:'confirmed',why:'נתוני MP4 התקבלו'};
+  return {state:'uncertain',why:'שרת מגיב, ניגון לא אומת'};
+ }catch(e){return {state:'uncertain',why:'לא ניתן לאמת מהדפדפן (רשת/CORS/timeout)'}
+ }finally{clearTimeout(timer)}}
+async function probe(url){const first=await oneProbe(url);if(first.state!=='dead')return first;
+ const second=await oneProbe(url);return second.state==='dead'?{state:'dead',why:'404/410 התקבל בשתי בדיקות'}:{state:'uncertain',why:'תוצאה לא עקבית בבדיקה חוזרת'};}
+async function runPool(tasks,worker,n,onProgress){let next=0,done=0;const results=new Array(tasks.length);
+ await Promise.all(Array.from({length:Math.min(n,tasks.length)},async()=>{while(true){const i=next++;if(i>=tasks.length)break;results[i]=await worker(tasks[i]);done++;if(done%10===0||done===tasks.length)onProgress(done,tasks.length)}}));return results;}
+function dedupe(list){let urlBest=new Map(),dups=0;
+ for(let ch of list){let k=ch.lang+'|'+normUrl(ch.url);let old=urlBest.get(k);if(!old||score(ch)>score(old)){urlBest.set(k,ch)}if(old)dups++}
+ let byChannel=new Map();for(let ch of urlBest.values()){
+ let k=duplicateKey(ch),old=byChannel.get(k);
+ if(!old||score(ch)>score(old))byChannel.set(k,ch);if(old)dups++;
+ }
+ return {arr:[...byChannel.values()],dups};}
+function order(a,b){const l={ru:0,he:1,en:2};return l[a.lang]-l[b.lang]||a.category-b.category||a.name.localeCompare(b.name,a.lang==='ru'?'ru':a.lang==='he'?'he':'en',{numeric:true,sensitivity:'base'});}
+function escapeAttr(v){return String(v||'').replace(/["\r\n]/g,' ').trim()}
+function formatM3U(channels){const out=['#EXTM3U'];for(let ch of channels){
+ let a=ch.attrs,group=String(({ru:1,he:2,en:3})[ch.lang]).padStart(2,'0')+' '+LANG[ch.lang]+' | '+catPrefix(ch.category)+' '+CATS[ch.category];
+ let attrs=[...Object.entries(a).filter(([k])=>k!=='group-title'),['group-title',group]];
+ out.push('#EXTINF:-1 '+attrs.filter(x=>x[1]).map(x=>x[0]+'="'+escapeAttr(x[1])+'"').join(' ')+','+ch.name.replace(/[\r\n]/g,' '));
+ for(let ex of ch.extra)out.push(ex);out.push(ch.url);
+ }return out.join('\r\n')+'\r\n';}
+function csvCell(s){return '"'+String(s??'').replace(/"/g,'""')+'"'}
+function makeCsv(data){let rows=[['שם ערוץ','שפה','קטגוריה','סטטוס','הסבר','מקור','קישור שידור']];for(let ch of data)rows.push([ch.name,LANG[ch.lang]||'לא מסווג',CATS[ch.category],ch.state==='confirmed'?'נגיש / התקבלו נתונים':ch.state==='dead'?'הוסר - 404/410':'לא אומת',ch.why,SOURCES[ch.sourceIndex].url,ch.url]);return '\uFEFF'+rows.map(row=>row.map(csvCell).join(',')).join('\r\n')}
+function makeDownload(id,content,filename,type){let blob=new Blob([content],{type:type||'application/vnd.apple.mpegurl;charset=utf-8'});let u=URL.createObjectURL(blob);blobUrls.push(u);let a=$(id);a.href=u;a.download=filename;a.setAttribute('aria-disabled','false')}
+async function go(){const btn=$('go');btn.disabled=true;$('downloads').classList.add('hidden');$('metrics').classList.add('hidden');
+ blobUrls.forEach(x=>URL.revokeObjectURL(x));blobUrls=[];
+ try{let all=[],srcCounts=[],errors=[];
+ for(let i=0;i<SOURCES.length;i++){status('מורידה רשימה '+(i+1)+' מתוך '+SOURCES.length+'...');try{let t=await getSource(SOURCES[i]);let a=parseM3U(t,i);srcCounts.push(a.length);all.push(...a)}catch(e){srcCounts.push(0);errors.push('מקור '+(i+1)+': '+e.message)}}
+ if(!all.length)throw Error('לא ניתן להוריד אף רשימה. ודאי שיש חיבור אינטרנט, נסי ב-Chrome או השתמשי בקובץ המקור של הרשימות.\n'+errors.join('\n'));
+ status('סיווג שפות וקטגוריות...');let meta=await getMetadata();let skipped=0;
+ for(let ch of all){ch.lang=assignLanguage(ch,meta);if(!LANG[ch.lang]){skipped++;continue}ch.category=category(ch.attrs['group-title'],ch.name)}
+ let filtered=all.filter(x=>LANG[x.lang]);
+ let noUrl=0;let statusByUrl=new Map();let unique=[...new Set(filtered.map(ch=>ch.url))];
+ if($('test').checked){status('בודקת קישורים... 0 / '+unique.length+'\nחסימות דפדפן ייחשבו ללא אימות, והערוצים יישארו.');
+ let res=await runPool(unique,probe,15,(done,total)=>status('בודקת קישורים... '+done+' / '+total+'\nהבדיקה מוגבלת על ידי הרשאות הדפדפן ושרתי השידור.'));
+ for(let i=0;i<unique.length;i++)statusByUrl.set(unique[i],res[i]);
+ }else{for(let u of unique)statusByUrl.set(u,{state:'uncertain',why:'בדיקה לא בוצעה לבחירת המשתמשת'})}
+ for(let ch of filtered){Object.assign(ch,statusByUrl.get(ch.url))}
+ const dead=filtered.filter(ch=>ch.state==='dead').length;
+ const remaining=filtered.filter(ch=>ch.state!=='dead');
+ const dd=dedupe(remaining);const channels=dd.arr.sort(order);
+ const list1=channels.filter(ch=>ch.lang==='ru'||ch.lang==='he');const list2=channels;
+ const uncertain=channels.filter(ch=>ch.state==='uncertain').length,confirmed=channels.length-uncertain;
+ const counts={ru:channels.filter(x=>x.lang==='ru').length,he:channels.filter(x=>x.lang==='he').length,en:channels.filter(x=>x.lang==='en').length};
+ makeDownload('d1',formatM3U(list1),'Russian_Hebrew.m3u');makeDownload('d2',formatM3U(list2),'Russian_Hebrew_English.m3u');
+ makeDownload('dr',makeCsv(filtered),'M3U_verification_report.csv','text/csv;charset=utf-8');
+ const summary=[
+ 'סיכום איחוד רשימות M3U', 'תאריך: '+new Date().toLocaleString('he-IL'),
+ ...SOURCES.map((s,i)=>'מקור '+(i+1)+': '+s.url+' | ערוצים: '+srcCounts[i]),
+ 'קישורים במקורות: '+all.length,
+ 'לא נכנסו בגלל שפה שאינה ברשימה / שפה שלא זוהתה: '+skipped,
+ 'נפסלו בבדיקה בגלל HTTP 404/410 שחזרו פעמיים: '+dead,
+ 'כפילויות שהוסרו: '+dd.dups,
+ 'רוסית: '+counts.ru,'עברית: '+counts.he,'אנגלית: '+counts.en,
+ 'ערוצים שהתקבלו מהם נתוני שידור או HLS: '+confirmed,
+ 'ערוצים שתפקודם לא אומת ונשארו: '+uncertain,
+ 'קובץ רוסית+עברית: '+list1.length,
+ 'קובץ רוסית+עברית+אנגלית: '+list2.length,
+ 'חשוב: נגישות HTTP/מניפסט HLS אינה מבטיחה פענוח וניגון בפועל בכל מדינה או נגן.',
+ 'רק שלושת המקורות שהוגדרו נכללו. אין הוספה אוטומטית של רשימת ערוצי אנגלית עולמית.',
+ ...errors.map(x=>'שגיאה: '+x)
+ ].join('\r\n');makeDownload('dt',summary,'M3U_summary.txt','text/plain;charset=utf-8');
+ $('downloads').classList.remove('hidden');$('metrics').classList.remove('hidden');
+ $('metrics').innerHTML=[['רוסית',counts.ru],['עברית',counts.he],['אנגלית',counts.en],['לא אומתו ונשארו',uncertain],['נתוני שידור התקבלו',confirmed],['הוסרו כלא עובדים',dead],['כפילויות שהוסרו',dd.dups],['סה״כ קובץ מלא',list2.length]].map(([a,b])=>'<div class="metric"><span>'+a+'</span><b>'+b+'</b></div>').join('');
+ status('הקבצים הוכנו!\n'+(errors.length?'⚠️ לא כל המקורות נטענו: '+errors.join('; ')+'\n':'')+'לחצי על קישורי ההורדה מתחת לסיכום.\nערוצים שלא ניתן לאמת נשארו, כנדרש.');
+ }catch(e){status('אירעה שגיאה: '+e.message)}finally{btn.disabled=false}}
+$('go').addEventListener('click',go);
+</script></body></html>
